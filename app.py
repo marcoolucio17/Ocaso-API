@@ -1,33 +1,95 @@
-from flask import Flask, request, redirect, url_for, render_template
+from flask import Flask, request, jsonify, render_template
+import requests
 import os
+from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
 
-# Set the upload folder and allowed extensions
-UPLOAD_FOLDER = 'uploads/'
-ALLOWED_EXTENSIONS = {'pdf'}
+OPENAI_API_KEY = "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"
+OPENAI_UPLOAD_URL = "https://api.openai.com/v1/files"
+OPENAI_RETRIEVE_CONTENT_URL = "https://api.openai.com/v1/files/{file_id}/content"
+
+UPLOAD_FOLDER = '/uploads'
+ALLOWED_EXTENSIONS = {'pdf', 'txt', 'png', 'jpg', 'jpeg', 'gif'}
+
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
-# Check if the file extension is allowed
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-# Route for uploading files
+def process_file_with_openai(filepath, filename, purpose):
+    try:
+        # Upload file to OpenAI
+        with open(filepath, "rb") as file_to_upload:
+            openai_upload_response = requests.post(
+                OPENAI_UPLOAD_URL,
+                headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
+                files={"file": (filename, file_to_upload), "purpose": (None, purpose)}
+            )
+        
+        if openai_upload_response.status_code != 200:
+            raise Exception(f"File upload to OpenAI failed: {openai_upload_response.text}")
+        
+        file_id = openai_upload_response.json()['id']
+        
+        response_data = {
+            "message": "File processed successfully",
+            "file_id": file_id,
+            "purpose": purpose
+        }
+        
+        # Only try to retrieve content if purpose allows it
+        if purpose != 'assistants':
+            try:
+                openai_retrieve_response = requests.get(
+                    OPENAI_RETRIEVE_CONTENT_URL.format(file_id=file_id),
+                    headers={"Authorization": f"Bearer {OPENAI_API_KEY}"}
+                )
+                
+                if openai_retrieve_response.status_code == 200:
+                    file_content = openai_retrieve_response.content
+                    content_preview = file_content[:100].decode('utf-8', errors='ignore')
+                    response_data["content_preview"] = content_preview
+                else:
+                    response_data["retrieval_note"] = "Content retrieval not allowed or failed"
+            except Exception as retrieval_error:
+                response_data["retrieval_error"] = str(retrieval_error)
+        else:
+            response_data["retrieval_note"] = "Content retrieval not attempted for 'assistants' purpose"
+        
+        return response_data, 200
+        
+    except Exception as e:
+        return {"error": str(e)}, 500
+
 @app.route('/upload', methods=['GET', 'POST'])
-def upload_file():
+def upload_and_process_file():
     if request.method == 'POST':
-        # Check if a file is uploaded
         if 'file' not in request.files:
-            return 'No file part'
+            return jsonify({"error": "No file part"}), 400
         file = request.files['file']
         if file.filename == '':
-            return 'No selected file'
+            return jsonify({"error": "No selected file"}), 400
         if file and allowed_file(file.filename):
-            filename = file.filename
-            file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
-            # You can add functionality to store the file in a database here
-            return 'File uploaded successfully'
+            filename = secure_filename(file.filename)
+            filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+            file.save(filepath)
+            
+            # Get the purpose from form data, default to 'assistants'
+            purpose = request.form.get('purpose', 'assistants')
+            
+            # Process the file with OpenAI
+            result, status_code = process_file_with_openai(filepath, filename, purpose)
+            
+            # Add local file info to the response
+            result['local_filename'] = filename
+            result['local_filepath'] = filepath
+            
+            return jsonify(result), status_code
+        else:
+            return jsonify({"error": "File type not allowed"}), 400
     return render_template('upload.html')
 
-if __name__ == "__main__":
+if __name__ == '__main__':
+    os.makedirs(UPLOAD_FOLDER, exist_ok=True)
     app.run(debug=True)
