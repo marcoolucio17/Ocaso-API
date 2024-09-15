@@ -2,14 +2,19 @@ from flask import Flask, request, jsonify, render_template
 import requests
 import os
 from werkzeug.utils import secure_filename
+from dotenv import load_dotenv
+
+load_dotenv()
 
 app = Flask(__name__)
 
-OPENAI_API_KEY = "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"
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 OPENAI_UPLOAD_URL = "https://api.openai.com/v1/files"
 OPENAI_RETRIEVE_CONTENT_URL = "https://api.openai.com/v1/files/{file_id}/content"
 
-UPLOAD_FOLDER = '/uploads'
+GCLOUD_PATH = '/tmp/uploads'
+
+UPLOAD_FOLDER = os.path.join(os.getcwd(), GCLOUD_PATH)
 ALLOWED_EXTENSIONS = {'pdf', 'txt', 'png', 'jpg', 'jpeg', 'gif'}
 
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
@@ -73,6 +78,10 @@ def upload_and_process_file():
         if file and allowed_file(file.filename):
             filename = secure_filename(file.filename)
             filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+            
+            # Create the upload folder if it doesn't exist
+            os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+            
             file.save(filepath)
             
             # Get the purpose from form data, default to 'assistants'
@@ -88,7 +97,8 @@ def upload_and_process_file():
             return jsonify(result), status_code
         else:
             return jsonify({"error": "File type not allowed"}), 400
-    return render_template('upload.html')
+    return jsonify({"message": "Please use POST method to upload files"}), 400
+
 
 if __name__ == '__main__':
     os.makedirs(UPLOAD_FOLDER, exist_ok=True)
