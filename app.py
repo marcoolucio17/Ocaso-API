@@ -1,20 +1,33 @@
-from flask import Flask
+from flask import Flask, request, redirect, url_for, render_template
+import os
 
-# Flask constructor takes the name of 
-# current module (__name__) as argument.
 app = Flask(__name__)
 
-# The route() function of the Flask class is a decorator, 
-# which tells the application which URL should call 
-# the associated function.
-@app.route('/')
-# ‘/’ URL is bound with hello_world() function.
-def hello_world():
-    return 'Hello World'
+# Set the upload folder and allowed extensions
+UPLOAD_FOLDER = 'uploads/'
+ALLOWED_EXTENSIONS = {'pdf'}
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
-# main driver function
-if __name__ == '__main__':
+# Check if the file extension is allowed
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-    # run() method of Flask class runs the application 
-    # on the local development server.
-    app.run(port = 8000)
+# Route for uploading files
+@app.route('/upload', methods=['GET', 'POST'])
+def upload_file():
+    if request.method == 'POST':
+        # Check if a file is uploaded
+        if 'file' not in request.files:
+            return 'No file part'
+        file = request.files['file']
+        if file.filename == '':
+            return 'No selected file'
+        if file and allowed_file(file.filename):
+            filename = file.filename
+            file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
+            # You can add functionality to store the file in a database here
+            return 'File uploaded successfully'
+    return render_template('upload.html')
+
+if __name__ == "__main__":
+    app.run(debug=True)
