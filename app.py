@@ -9,7 +9,7 @@ OPENAI_API_KEY = "sk-proj-UT7F1hBTRDP6CKOV-fBZFa-QnHxE8L8WTRSA1uhdJu9cFMS4oIuw4p
 OPENAI_UPLOAD_URL = "https://api.openai.com/v1/files"
 OPENAI_RETRIEVE_CONTENT_URL = "https://api.openai.com/v1/files/{file_id}/content"
 
-UPLOAD_FOLDER = '/uploads'
+UPLOAD_FOLDER = 'uploads'
 ALLOWED_EXTENSIONS = {'pdf', 'txt', 'png', 'jpg', 'jpeg', 'gif'}
 
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
@@ -17,6 +17,54 @@ app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
+# iLovePDF API keys
+PUBLIC_KEY = 'project_public_82dab4b6a689ce7ffc4b62cfa15e1b8a_bZSLIfc826f70e0379aea86fd24c5202db7f9'
+SECRET_KEY = 'secret_key_8b30519731ee08742205ab40eec2ab78_JMsbM672f6a8ac23d7273fd9b92f65d2a973d'
+
+# iLovePDF API endpoint
+API_URL = 'https://api.ilovepdf.com/v1/start'
+
+# Function to upload PDF and convert to PNG using iLovePDF
+
+@app.route('/convert', methods=['GET', 'POST'])
+def convert_pdf_to_png(pdf_path):
+    API_URL = 'https://api.ilovepdf.com/v1/start'
+
+    # Start a task for image conversion
+    response = requests.post(
+        API_URL, 
+        json={"task": "imagepdf"}, 
+        headers={"Authorization": f"Bearer {PUBLIC_KEY}"}
+    )
+    
+    task_data = response.json()
+    task_id = task_data['server_filename']
+
+    # Upload the PDF file
+    files = {
+        'file': open(pdf_path, 'rb')
+    }
+    upload_url = f'https://{task_data["server"]}/v1/upload'
+    requests.post(upload_url, files=files, headers={"Authorization": f"Bearer {PUBLIC_KEY}"})
+
+    # Execute the task to convert to PNG
+    process_url = f'https://{task_data["server"]}/v1/process'
+    requests.post(process_url, json={"task": task_id, "output": "png"}, headers={"Authorization": f"Bearer {PUBLIC_KEY}"})
+
+    # Download the converted PNG
+    download_url = f'https://{task_data["server"]}/v1/download'
+    download_response = requests.get(download_url, stream=True, headers={"Authorization": f"Bearer {PUBLIC_KEY}"})
+
+    # Save the PNG file locally
+    output_file = os.path.splitext(pdf_path)[0] + '.png'
+    with open(output_file, 'wb') as f:
+        for chunk in download_response.iter_content(chunk_size=1024):
+            if chunk:
+                f.write(chunk)
+
+    return output_file
+
+@app.route('/process', methods=['GET', 'POST'])
 def process_file_with_openai(filepath, filename, purpose):
     try:
         # Upload file to OpenAI
@@ -38,6 +86,7 @@ def process_file_with_openai(filepath, filename, purpose):
             "purpose": purpose
         }
         
+
         # Only try to retrieve content if purpose allows it
         if purpose != 'assistants':
             try:
@@ -65,30 +114,34 @@ def process_file_with_openai(filepath, filename, purpose):
 @app.route('/upload', methods=['GET', 'POST'])
 def upload_and_process_file():
     if request.method == 'POST':
+        # Check if file is present
         if 'file' not in request.files:
             return jsonify({"error": "No file part"}), 400
+
         file = request.files['file']
+        
+        # Check if a file is selected
         if file.filename == '':
             return jsonify({"error": "No selected file"}), 400
+
         if file and allowed_file(file.filename):
+            # Secure the filename and save to the uploads folder
             filename = secure_filename(file.filename)
             filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
             file.save(filepath)
+
+            # Convert the PDF to PNG
+            try:
+                png_file_path = convert_pdf_to_png(filepath)
+                            # Process the PNG file with OpenAI after conversion
+                purpose = request.form.get('purpose', 'assistants')  # Optionally get 'purpose'
+                result, status_code = process_file_with_openai(png_file_path, filename, purpose)
             
-            # Get the purpose from form data, default to 'assistants'
-            purpose = request.form.get('purpose', 'assistants')
-            
-            # Process the file with OpenAI
-            result, status_code = process_file_with_openai(filepath, filename, purpose)
-            
-            # Add local file info to the response
-            result['local_filename'] = filename
-            result['local_filepath'] = filepath
-            
-            return jsonify(result), status_code
+                return jsonify({"message": "File converted successfully", "image_path": png_file_path}), 200
+            except Exception as e:
+                return jsonify({"error": f"Conversion failed: {str(e)}"}), 500
         else:
             return jsonify({"error": "File type not allowed"}), 400
-    return render_template('upload.html')
 
 if __name__ == '__main__':
     os.makedirs(UPLOAD_FOLDER, exist_ok=True)
